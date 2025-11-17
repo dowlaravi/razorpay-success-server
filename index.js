@@ -14,13 +14,10 @@ admin.initializeApp({
 const db = admin.database();
 
 app.get("/success", async (req, res) => {
-  const uid = req.query.uid;
 
-  if (!uid) return res.send("User ID not found");
-
-  await db.ref("users/" + uid).set({
+  await db.ref("premium_status").set({
     premium: true,
-    activatedOn: new Date().toISOString(),
+    activated_on: new Date().toISOString()
   });
 
   res.send("Premium Activated Successfully!");
