@@ -1,50 +1,54 @@
-import Razorpay from "razorpay";
 import crypto from "crypto";
 import admin from "firebase-admin";
 
-// Firebase initialize
+export const config = { api: { bodyParser: false } };
+
 if (!admin.apps.length) {
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
   admin.initializeApp({
-    credential: admin.credential.applicationDefault(),
-    databaseURL: process.env.FIREBASE_DB_URL,
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: process.env.FIREBASE_DB_URL
   });
 }
 
-const db = admin.database();
+function getRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", chunk => data += chunk);
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
 
-// Razorpay Webhook Secret
-const WEBHOOK_SECRET = "ravi8546#";
+export default async (req, res) => {
+  if (req.method !== "POST")
+    return res.status(405).send("Only POST allowed");
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).send("Method Not Allowed");
-  }
+  const rawBody = await getRawBody(req);
+  const signature = req.headers["x-razorpay-signature"];
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-  const razorSignature = req.headers["x-razorpay-signature"];
-  const body = JSON.stringify(req.body);
-
-  // Create expected signature
-  const expectedSignature = crypto
-    .createHmac("sha256", WEBHOOK_SECRET)
-    .update(body)
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(rawBody)
     .digest("hex");
 
-  // Signature verification
-  if (razorSignature !== expectedSignature) {
+  if (signature !== expected)
     return res.status(400).send("Invalid signature");
-  }
 
-  // Payment captured event
-  if (req.body.event === "payment.captured") {
-    const email = req.body.payload.payment.entity.email;
+  const data = JSON.parse(rawBody);
+  const payment = data.payload.payment.entity;
 
-    await db.ref("premium_users/" + email.replace(".", "_")).set({
-      premium: true,
-      activated_on: new Date().toISOString(),
-    });
+  const email = payment.notes.email;
+  if (!email) return res.status(400).send("Email missing");
 
-    return res.status(200).send("Premium Updated Successfully");
-  }
+  const safe = email.replace(/\./g, "_").replace(/@/g, "_");
 
-  res.status(200).send("Webhook received");
-}
+  await admin.database().ref("users/" + safe).update({
+    premium: true,
+    paymentId: payment.id,
+    updatedAt: Date.now()
+  });
+
+  return res.status(200).send("OK");
+};
